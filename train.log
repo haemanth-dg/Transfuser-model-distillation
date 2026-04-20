@@ -1,0 +1,38 @@
+=========================================
+KD Training Configuration
+=========================================
+Python: /home/haemanth/miniconda3/envs/tf++/bin/python
+Config: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/config.json
+Teacher: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/model_final_merged.pth
+Data Root: /home/haemanth/Transfuser++/nuplan/nuplan_workspace/nuplan_data
+Output Dir: /home/haemanth/Transfuser++/model_distillation/output
+Loadfile: /home/haemanth/Transfuser++/model_distillation/output/student_epoch020.pth
+Continue Epoch: 0
+Epochs: 30
+Batch Size: 128
+Learning Rate: 1e-3
+Num Workers: 16
+=========================================
+Loaded 188108 KD samples from 1 root folder(s)
+Loaded 7407 KD samples from 1 root folder(s)
+KD training configuration:
+  config_path : /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/config.json
+  teacher_ckpt: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/model_final_merged.pth
+  data_root   : ['/home/haemanth/Transfuser++/nuplan/nuplan_workspace/nuplan_data']
+  output_dir  : /home/haemanth/Transfuser++/model_distillation/output
+  train/val   : 188108 / 7407 samples
+  ego_vel     : forced to 0.0 by dataset design
+  loadfile    : /home/haemanth/Transfuser++/model_distillation/output/student_epoch020.pth
+  continue_epoch: 0
+Student parameter count: 11,551,581
+Loading student resume file: /home/haemanth/Transfuser++/model_distillation/output/student_epoch020.pth
+Resume epoch resolved from metadata/file/arg: 20
+Resuming from epoch 21
+
+[Epoch 21/30]  lr=1.00e-03
+  step 1000/1470  checkpoint=0.3235 | target_speed_task=0.5586 | bev_kd=0.3706 | fused_kd=0.2501 | speed_kd=1.6347 | total=2.0098
+  TRAIN  checkpoint=0.2866  target_speed_task=0.5437  bev_kd=0.3639  fused_kd=0.2419  speed_kd=1.6105  total=1.9385
+  VAL    checkpoint=0.2120  target_speed_task=0.5219  bev_kd=0.4494  fused_kd=0.2356  speed_kd=2.2413  total=2.1971
+  ✓ saved best  (val_total=2.1971)
+
+[Epoch 22/30]  lr=9.97e-04

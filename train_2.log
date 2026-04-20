@@ -1,0 +1,159 @@
+=========================================
+KD Training Configuration
+=========================================
+Python: /home/haemanth/miniconda3/envs/tf++/bin/python
+Config: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/config.json
+Teacher: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/model_final_merged.pth
+Data Root: /home/haemanth/Transfuser++/nuplan/nuplan_workspace/nuplan_data
+Output Dir: /home/haemanth/Transfuser++/model_distillation/output_2
+Epochs: 30
+Batch Size: 200
+Learning Rate: 1e-3
+Num Workers: 16
+=========================================
+Loaded 188108 KD samples from 1 root folder(s)
+Loaded 7407 KD samples from 1 root folder(s)
+KD training configuration:
+  config_path : /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/config.json
+  teacher_ckpt: /home/haemanth/Transfuser++/carla_garage/output/final_merged_model/model_final_merged.pth
+  data_root   : ['/home/haemanth/Transfuser++/nuplan/nuplan_workspace/nuplan_data']
+  output_dir  : /home/haemanth/Transfuser++/model_distillation/output_2
+  train/val   : 188108 / 7407 samples
+  ego_vel     : forced to 0.0 by dataset design
+
+[Epoch 1/30]  lr=1.00e-03
+  TRAIN  checkpoint=0.4371  target_speed_task=0.7328  bev_kd=0.5500  fused_kd=0.3135  speed_kd=2.0187  total=2.6109
+  VAL    checkpoint=0.0738  target_speed_task=0.6484  bev_kd=0.5029  fused_kd=0.2451  speed_kd=2.4679  total=2.3301
+  ✓ saved best  (val_total=2.3301)
+
+[Epoch 2/30]  lr=9.97e-04
+  TRAIN  checkpoint=0.1618  target_speed_task=0.5367  bev_kd=0.4006  fused_kd=0.2220  speed_kd=1.5903  total=1.8050
+  VAL    checkpoint=0.1069  target_speed_task=0.6616  bev_kd=0.4672  fused_kd=0.2366  speed_kd=2.7584  total=2.4996
+
+[Epoch 3/30]  lr=9.89e-04
+  TRAIN  checkpoint=0.1255  target_speed_task=0.4969  bev_kd=0.3655  fused_kd=0.2022  speed_kd=1.5555  total=1.6841
+  VAL    checkpoint=0.0734  target_speed_task=0.6132  bev_kd=0.4584  fused_kd=0.2283  speed_kd=2.7319  total=2.3959
+
+[Epoch 4/30]  lr=9.76e-04
+  TRAIN  checkpoint=0.1073  target_speed_task=0.4754  bev_kd=0.3425  fused_kd=0.1931  speed_kd=1.5276  total=1.6143
+  VAL    checkpoint=0.0648  target_speed_task=0.6281  bev_kd=0.4474  fused_kd=0.2347  speed_kd=2.6588  total=2.3634
+
+[Epoch 5/30]  lr=9.57e-04
+  TRAIN  checkpoint=0.1001  target_speed_task=0.4638  bev_kd=0.3310  fused_kd=0.1921  speed_kd=1.5075  total=1.5792
+  VAL    checkpoint=0.0657  target_speed_task=0.6784  bev_kd=0.4300  fused_kd=0.2194  speed_kd=2.1261  total=2.1319
+  ✓ saved best  (val_total=2.1319)
+
+[Epoch 6/30]  lr=9.34e-04
+  TRAIN  checkpoint=0.0912  target_speed_task=0.4444  bev_kd=0.3113  fused_kd=0.1776  speed_kd=1.4848  total=1.5224
+  VAL    checkpoint=0.0650  target_speed_task=0.5837  bev_kd=0.4349  fused_kd=0.2145  speed_kd=2.0958  total=2.0213
+  ✓ saved best  (val_total=2.0213)
+
+[Epoch 7/30]  lr=9.05e-04
+  TRAIN  checkpoint=0.0830  target_speed_task=0.4363  bev_kd=0.3009  fused_kd=0.1709  speed_kd=1.4691  total=1.4898
+  VAL    checkpoint=0.0614  target_speed_task=0.6520  bev_kd=0.4216  fused_kd=0.2105  speed_kd=1.9293  total=1.9941
+  ✓ saved best  (val_total=1.9941)
+
+[Epoch 8/30]  lr=8.73e-04
+  TRAIN  checkpoint=0.0797  target_speed_task=0.4303  bev_kd=0.2909  fused_kd=0.1661  speed_kd=1.4566  total=1.4668
+  VAL    checkpoint=0.1006  target_speed_task=0.6542  bev_kd=0.4178  fused_kd=0.2080  speed_kd=1.9485  total=2.0419
+
+[Epoch 9/30]  lr=8.36e-04
+  TRAIN  checkpoint=0.0777  target_speed_task=0.4289  bev_kd=0.2830  fused_kd=0.1623  speed_kd=1.4533  total=1.4559
+  VAL    checkpoint=0.0537  target_speed_task=0.6449  bev_kd=0.4262  fused_kd=0.2073  speed_kd=1.8466  total=1.9386
+  ✓ saved best  (val_total=1.9386)
+
+[Epoch 10/30]  lr=7.96e-04
+  TRAIN  checkpoint=0.0717  target_speed_task=0.4210  bev_kd=0.2748  fused_kd=0.1580  speed_kd=1.4353  total=1.4268
+  VAL    checkpoint=0.0560  target_speed_task=0.6406  bev_kd=0.4099  fused_kd=0.2043  speed_kd=1.9826  total=1.9951
+
+[Epoch 11/30]  lr=7.53e-04
+  TRAIN  checkpoint=0.0693  target_speed_task=0.4206  bev_kd=0.2702  fused_kd=0.1548  speed_kd=1.4304  total=1.4176
+  VAL    checkpoint=0.0636  target_speed_task=0.5793  bev_kd=0.3981  fused_kd=0.2015  speed_kd=2.0698  total=1.9776
+
+[Epoch 12/30]  lr=7.06e-04
+  TRAIN  checkpoint=0.0661  target_speed_task=0.4153  bev_kd=0.2629  fused_kd=0.1517  speed_kd=1.4194  total=1.3984
+  VAL    checkpoint=0.0788  target_speed_task=0.5816  bev_kd=0.4043  fused_kd=0.2024  speed_kd=2.0192  total=1.9734
+
+[Epoch 13/30]  lr=6.58e-04
+  TRAIN  checkpoint=0.0638  target_speed_task=0.4117  bev_kd=0.2574  fused_kd=0.1487  speed_kd=1.4122  total=1.3847
+  VAL    checkpoint=0.0716  target_speed_task=0.5636  bev_kd=0.4055  fused_kd=0.1976  speed_kd=2.1625  total=2.0181
+
+[Epoch 14/30]  lr=6.08e-04
+  TRAIN  checkpoint=0.0610  target_speed_task=0.4093  bev_kd=0.2526  fused_kd=0.1463  speed_kd=1.4037  total=1.3716
+  VAL    checkpoint=0.0585  target_speed_task=0.5892  bev_kd=0.3955  fused_kd=0.1979  speed_kd=1.8931  total=1.8909
+  ✓ saved best  (val_total=1.8909)
+
+[Epoch 15/30]  lr=5.57e-04
+  TRAIN  checkpoint=0.0594  target_speed_task=0.4085  bev_kd=0.2496  fused_kd=0.1444  speed_kd=1.4013  total=1.3655
+  VAL    checkpoint=0.0561  target_speed_task=0.6303  bev_kd=0.3928  fused_kd=0.1966  speed_kd=1.9730  total=1.9676
+
+[Epoch 16/30]  lr=5.05e-04
+  TRAIN  checkpoint=0.0576  target_speed_task=0.4049  bev_kd=0.2450  fused_kd=0.1428  speed_kd=1.3926  total=1.3527
+  VAL    checkpoint=0.0597  target_speed_task=0.5875  bev_kd=0.3897  fused_kd=0.1942  speed_kd=2.0306  total=1.9544
+
+[Epoch 17/30]  lr=4.53e-04
+  TRAIN  checkpoint=0.0559  target_speed_task=0.4029  bev_kd=0.2413  fused_kd=0.1407  speed_kd=1.3860  total=1.3428
+  VAL    checkpoint=0.0610  target_speed_task=0.5774  bev_kd=0.3867  fused_kd=0.1935  speed_kd=2.0214  total=1.9392
+
+[Epoch 18/30]  lr=4.02e-04
+  TRAIN  checkpoint=0.0542  target_speed_task=0.4010  bev_kd=0.2372  fused_kd=0.1388  speed_kd=1.3799  total=1.3331
+  VAL    checkpoint=0.0552  target_speed_task=0.5952  bev_kd=0.3854  fused_kd=0.1922  speed_kd=1.8976  total=1.8880
+  ✓ saved best  (val_total=1.8880)
+
+[Epoch 19/30]  lr=3.52e-04
+  TRAIN  checkpoint=0.0529  target_speed_task=0.4002  bev_kd=0.2347  fused_kd=0.1374  speed_kd=1.3747  total=1.3265
+  VAL    checkpoint=0.0558  target_speed_task=0.5893  bev_kd=0.3867  fused_kd=0.1920  speed_kd=1.8651  total=1.8670
+  ✓ saved best  (val_total=1.8670)
+
+[Epoch 20/30]  lr=3.04e-04
+  TRAIN  checkpoint=0.0515  target_speed_task=0.3997  bev_kd=0.2326  fused_kd=0.1365  speed_kd=1.3698  total=1.3206
+  VAL    checkpoint=0.0604  target_speed_task=0.5987  bev_kd=0.3814  fused_kd=0.1928  speed_kd=1.9049  total=1.8987
+
+[Epoch 21/30]  lr=2.58e-04
+  TRAIN  checkpoint=0.0507  target_speed_task=0.3980  bev_kd=0.2298  fused_kd=0.1353  speed_kd=1.3631  total=1.3128
+  VAL    checkpoint=0.0607  target_speed_task=0.5928  bev_kd=0.3783  fused_kd=0.1922  speed_kd=1.8559  total=1.8667
+  ✓ saved best  (val_total=1.8667)
+
+[Epoch 22/30]  lr=2.14e-04
+  TRAIN  checkpoint=0.0496  target_speed_task=0.3971  bev_kd=0.2278  fused_kd=0.1341  speed_kd=1.3598  total=1.3075
+  VAL    checkpoint=0.0559  target_speed_task=0.5820  bev_kd=0.3787  fused_kd=0.1899  speed_kd=1.8510  total=1.8477
+  ✓ saved best  (val_total=1.8477)
+
+[Epoch 23/30]  lr=1.74e-04
+  TRAIN  checkpoint=0.0486  target_speed_task=0.3965  bev_kd=0.2258  fused_kd=0.1333  speed_kd=1.3559  total=1.3026
+  VAL    checkpoint=0.0568  target_speed_task=0.5988  bev_kd=0.3765  fused_kd=0.1899  speed_kd=1.8293  total=1.8534
+
+[Epoch 24/30]  lr=1.37e-04
+  TRAIN  checkpoint=0.0478  target_speed_task=0.3960  bev_kd=0.2242  fused_kd=0.1326  speed_kd=1.3523  total=1.2983
+  VAL    checkpoint=0.0536  target_speed_task=0.5668  bev_kd=0.3783  fused_kd=0.1891  speed_kd=1.9700  total=1.8891
+
+[Epoch 25/30]  lr=1.05e-04
+  TRAIN  checkpoint=0.0472  target_speed_task=0.3958  bev_kd=0.2229  fused_kd=0.1320  speed_kd=1.3473  total=1.2940
+  VAL    checkpoint=0.0547  target_speed_task=0.5741  bev_kd=0.3755  fused_kd=0.1883  speed_kd=1.8917  total=1.8565
+
+[Epoch 26/30]  lr=7.63e-05
+  TRAIN  checkpoint=0.0465  target_speed_task=0.3957  bev_kd=0.2217  fused_kd=0.1314  speed_kd=1.3451  total=1.2913
+  VAL    checkpoint=0.0577  target_speed_task=0.5806  bev_kd=0.3742  fused_kd=0.1883  speed_kd=1.8311  total=1.8350
+  ✓ saved best  (val_total=1.8350)
+
+[Epoch 27/30]  lr=5.28e-05
+  TRAIN  checkpoint=0.0459  target_speed_task=0.3956  bev_kd=0.2209  fused_kd=0.1311  speed_kd=1.3420  total=1.2885
+  VAL    checkpoint=0.0571  target_speed_task=0.5876  bev_kd=0.3745  fused_kd=0.1882  speed_kd=1.8201  total=1.8361
+
+[Epoch 28/30]  lr=3.42e-05
+  TRAIN  checkpoint=0.0456  target_speed_task=0.3953  bev_kd=0.2202  fused_kd=0.1308  speed_kd=1.3399  total=1.2864
+  VAL    checkpoint=0.0577  target_speed_task=0.5873  bev_kd=0.3738  fused_kd=0.1883  speed_kd=1.8302  total=1.8412
+
+[Epoch 29/30]  lr=2.08e-05
+  TRAIN  checkpoint=0.0453  target_speed_task=0.3954  bev_kd=0.2198  fused_kd=0.1306  speed_kd=1.3380  total=1.2849
+  VAL    checkpoint=0.0578  target_speed_task=0.5818  bev_kd=0.3731  fused_kd=0.1878  speed_kd=1.8356  total=1.8379
+
+[Epoch 30/30]  lr=1.27e-05
+  TRAIN  checkpoint=0.0452  target_speed_task=0.3954  bev_kd=0.2195  fused_kd=0.1305  speed_kd=1.3374  total=1.2843
+  VAL    checkpoint=0.0556  target_speed_task=0.5741  bev_kd=0.3729  fused_kd=0.1879  speed_kd=1.8504  total=1.8353
+
+Training complete.
+=========================================
+Training completed!
+Output saved to: /home/haemanth/Transfuser++/model_distillation/output_2
+=========================================
