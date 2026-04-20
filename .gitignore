@@ -1,0 +1,47 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Test and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Logs and runtime output
+*.log
+*.out
+*.err
+*.pid
+train.log
+tensorboard/
+runs/
+wandb/
+
+# Model artifacts and exports
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.tflite
+*.engine
+*.plan
+
+# Generated outputs
+output/
+outputs/
+checkpoints/
+export/
+
+# OS files
+.DS_Store
+Thumbs.db
