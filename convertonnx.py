@@ -12,7 +12,7 @@ from .model import LidarCenterNet
 from .config import GlobalConfig
 
 CONFIG_PATH = "models/pretrained_models/all_towns"
-ONNX_PATH = "tfpp.onnx"
+ONNX_PATH = "tfpp_finetuned.onnx"
 DEVICE = torch.device("cpu")
 
 # --------------------------------------------------
@@ -33,7 +33,7 @@ config.sync_batch_norm = False
 # --------------------------------------------------
 net = None
 for f in os.listdir(CONFIG_PATH):
-    if f.startswith("model") and f.endswith(".pth"):
+    if f.startswith("model_final") and f.endswith(".pth"):
         net = LidarCenterNet(config).to(DEVICE)
         net.load_state_dict(
             torch.load(os.path.join(CONFIG_PATH, f), map_location=DEVICE),

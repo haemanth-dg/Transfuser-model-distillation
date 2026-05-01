@@ -42,13 +42,14 @@ def parse_args():
     parser.add_argument("--train_cache", type=str, default=None)
     parser.add_argument("--loadfile", type=str, default=None)
     parser.add_argument("--continue_epoch", type=int, default=0)
+    parser.add_argument("--bbox_only_train", action="store_true")
     parser.add_argument("--detect_boxes", dest="detect_boxes", action="store_true")
     parser.add_argument("--no_detect_boxes", dest="detect_boxes", action="store_false")
     parser.set_defaults(detect_boxes=True)
     return parser.parse_args()
 
 
-def build_config(config_path, detect_boxes):
+def build_config(config_path, detect_boxes, bbox_only_train=False):
     with open(config_path, "r", encoding="utf-8") as handle:
         cfg_dict = json.load(handle)
 
@@ -66,6 +67,7 @@ def build_config(config_path, detect_boxes):
     config.augment = False
     config.use_ground_plane = False
     config.only_perception = False
+    config.bbox_only_train = bool(bbox_only_train)
     return config
 
 
@@ -80,18 +82,19 @@ def np_route_to_checkpoints(route, predict_checkpoint_len):
     return np.concatenate([route, pad], axis=0)
 
 
-def make_collate_fn(predict_checkpoint_len):
+def make_collate_fn(predict_checkpoint_len, bbox_only=False):
     def collate_fn(batch_list):
         rgb = torch.stack([torch.from_numpy(item["rgb"]).float() for item in batch_list])
         lidar_bev = torch.stack([torch.from_numpy(item["lidar"]).float() for item in batch_list])
-        target_point = torch.stack([torch.from_numpy(item["target_point"]).float() for item in batch_list])
-        command = torch.stack([torch.from_numpy(item["command"]).float() for item in batch_list])
-        ego_vel = torch.tensor([float(item["speed"]) for item in batch_list], dtype=torch.float32).unsqueeze(1)
-        target_speed = torch.tensor([int(item["target_speed"]) for item in batch_list], dtype=torch.long)
-        checkpoints = torch.stack([
-            torch.from_numpy(np_route_to_checkpoints(item["route"], predict_checkpoint_len)).float()
-            for item in batch_list
-        ])
+        if not bbox_only:
+            target_point = torch.stack([torch.from_numpy(item["target_point"]).float() for item in batch_list])
+            command = torch.stack([torch.from_numpy(item["command"]).float() for item in batch_list])
+            ego_vel = torch.tensor([float(item["speed"]) for item in batch_list], dtype=torch.float32).unsqueeze(1)
+            target_speed = torch.tensor([int(item["target_speed"]) for item in batch_list], dtype=torch.long)
+            checkpoints = torch.stack([
+                torch.from_numpy(np_route_to_checkpoints(item["route"], predict_checkpoint_len)).float()
+                for item in batch_list
+            ])
         center_heatmap_target = torch.stack([
             torch.from_numpy(item["center_heatmap_target"]).float() for item in batch_list
         ])
@@ -118,14 +121,9 @@ def make_collate_fn(predict_checkpoint_len):
         ])
         avg_factor = torch.tensor([float(item["avg_factor"]) for item in batch_list], dtype=torch.float32)
 
-        return {
+        batch = {
             "rgb": rgb,
             "lidar_bev": lidar_bev,
-            "target_point": target_point,
-            "ego_vel": ego_vel,
-            "command": command,
-            "checkpoints": checkpoints,
-            "target_speed": target_speed,
             "center_heatmap_label": center_heatmap_target,
             "wh_label": wh_target,
             "yaw_class_label": yaw_class_target,
@@ -136,6 +134,15 @@ def make_collate_fn(predict_checkpoint_len):
             "pixel_weight_label": pixel_weight,
             "avg_factor_label": avg_factor,
         }
+        if not bbox_only:
+            batch.update({
+                "target_point": target_point,
+                "ego_vel": ego_vel,
+                "command": command,
+                "checkpoints": checkpoints,
+                "target_speed": target_speed,
+            })
+        return batch
 
     return collate_fn
 
@@ -160,7 +167,7 @@ def build_loaders(config, args):
     if len(val_dataset) == 0:
         raise ValueError("No validation samples were found. Make sure some routes contain 'validation' in the name.")
 
-    collate_fn = make_collate_fn(config.predict_checkpoint_len)
+    collate_fn = make_collate_fn(config.predict_checkpoint_len, bbox_only=args.bbox_only_train)
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -190,7 +197,7 @@ def main():
     if not os.path.isfile(args.teacher_ckpt):
         raise FileNotFoundError(args.teacher_ckpt)
 
-    config = build_config(args.config_path, args.detect_boxes)
+    config = build_config(args.config_path, args.detect_boxes, args.bbox_only_train)
     train_loader, val_loader = build_loaders(config, args)
 
     run_output_dir = os.path.join(args.output_dir, args.experiment_name)
@@ -204,9 +211,34 @@ def main():
     print(f"  train/val   : {len(train_loader.dataset)} / {len(val_loader.dataset)} samples")
     print("  ego_vel     : forced to 0.0 by dataset design")
     print(f"  detect_boxes: {args.detect_boxes}")
+    print(f"  bbox_only_train: {args.bbox_only_train}")
+    
+    # ── Mode semantics and guardrails ──
+    if int(args.continue_epoch) == 0:
+        print(f"\n  MODE: FINE-TUNING (continue_epoch=0)")
+        if args.loadfile is not None:
+            print(f"    ✓ loadfile provided: {args.loadfile}")
+            print(f"    → Will load model weights only (no optimizer/scheduler/scaler)")
+            print(f"    → Starting from epoch 0")
+        else:
+            print(f"    ✓ No loadfile: fresh training from random init")
+            print(f"    → Starting from epoch 0")
+    else:
+        print(f"\n  MODE: RESUME (continue_epoch={args.continue_epoch})")
+        if args.loadfile is None:
+            raise ValueError(
+                f"ERROR: Resume mode requires --loadfile argument. "
+                f"Checkpoint file must be provided."
+            )
+        print(f"    ✓ loadfile required: {args.loadfile}")
+        print(f"    → Will load full training state (model + optimizer + scheduler + scaler)")
+        print(f"    → Will validate detect_boxes compatibility from metadata")
+        print(f"    → Will continue from saved epoch")
+    
     if args.loadfile is not None:
         print(f"  loadfile    : {args.loadfile}")
         print(f"  continue_epoch: {args.continue_epoch}")
+
 
     kd_train(
         hyperparameters={
@@ -224,6 +256,7 @@ def main():
             "save_every": int(args.save_every),
             "log_every": int(args.log_every),
             "detect_boxes": bool(args.detect_boxes),
+            "bbox_only_train": bool(args.bbox_only_train),
             "continue_epoch": int(args.continue_epoch),
             "loadfile": args.loadfile,
             "loss_weights": {
@@ -255,6 +288,7 @@ def main():
             "T": args.temperature,
         },
         detect_boxes=args.detect_boxes,
+        bbox_only_train=args.bbox_only_train,
         loadfile=args.loadfile,
         continue_epoch=args.continue_epoch,
     )

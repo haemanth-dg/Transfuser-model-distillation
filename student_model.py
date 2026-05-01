@@ -146,7 +146,7 @@ class StudentNet(nn.Module):
     # ══════════════════════════════════════════════════════════════════════════
 
     def forward(self, rgb, lidar_bev, target_point, ego_vel, command,
-                target_point_next=None, timer=None):
+                target_point_next=None, timer=None, bbox_only: bool = False):
         """
         Returns a tuple compatible with the teacher's 10-element output, plus a
         KD feature dict as the 11th element.
@@ -167,7 +167,7 @@ class StudentNet(nn.Module):
         _t = timer
         bs = rgb.shape[0]
 
-        if self.config.two_tp_input:
+        if self.config.two_tp_input and not bbox_only:
             target_point = torch.cat((target_point, target_point_next), dim=1)
 
         # ── backbone ────────────────────────────────────────────────────────
@@ -189,53 +189,58 @@ class StudentNet(nn.Module):
             fused = fused_spatial + self.encoder_pos_encoding(fused_spatial)
             fused = torch.flatten(fused, start_dim=2)
 
-        # ── extra sensor tokens ─────────────────────────────────────────────
-        if _t:
-            with _t.measure('student/join/extra_sensor_encoder'):
+        if bbox_only:
+            # Skip planning head compute entirely; only bbox head + KD features.
+            pred_checkpoint = None
+            pred_target_speed = None
+        else:
+            # ── extra sensor tokens ─────────────────────────────────────────────
+            if _t:
+                with _t.measure('student/join/extra_sensor_encoder'):
+                    sensors = []
+                    if self.config.use_velocity:
+                        sensors.append(self.velocity_normalization(ego_vel))
+                    if self.config.use_discrete_command:
+                        sensors.append(command)
+                    sensors = self.extra_sensor_encoder(torch.cat(sensors, dim=1))
+            else:
                 sensors = []
                 if self.config.use_velocity:
                     sensors.append(self.velocity_normalization(ego_vel))
                 if self.config.use_discrete_command:
                     sensors.append(command)
                 sensors = self.extra_sensor_encoder(torch.cat(sensors, dim=1))
-        else:
-            sensors = []
-            if self.config.use_velocity:
-                sensors.append(self.velocity_normalization(ego_vel))
-            if self.config.use_discrete_command:
-                sensors.append(command)
-            sensors = self.extra_sensor_encoder(torch.cat(sensors, dim=1))
 
-        # Append extra-sensor token and target-point token to memory sequence
-        sensors = sensors + self.extra_sensor_pos_embed.expand(bs, -1)
-        fused = torch.cat((fused, sensors.unsqueeze(2)), dim=2)     # [B, 256, T+1]
+            # Append extra-sensor token and target-point token to memory sequence
+            sensors = sensors + self.extra_sensor_pos_embed.expand(bs, -1)
+            fused = torch.cat((fused, sensors.unsqueeze(2)), dim=2)     # [B, 256, T+1]
 
-        tp_token = self.tp_encoder(target_point) + self.tp_pos_embed.expand(bs, -1)
-        fused = torch.cat((fused, tp_token.unsqueeze(2)), dim=2)    # [B, 256, T+2]
+            tp_token = self.tp_encoder(target_point) + self.tp_pos_embed.expand(bs, -1)
+            fused = torch.cat((fused, tp_token.unsqueeze(2)), dim=2)    # [B, 256, T+2]
 
-        fused = fused.permute(0, 2, 1)                              # [B, T+2, 256]
+            fused = fused.permute(0, 2, 1)                              # [B, T+2, 256]
 
-        # ── transformer decoder ─────────────────────────────────────────────
-        if _t:
-            with _t.measure('student/join/transformer_decoder_checkpoint'):
+            # ── transformer decoder ─────────────────────────────────────────────
+            if _t:
+                with _t.measure('student/join/transformer_decoder_checkpoint'):
+                    joined = self.join(
+                        self.checkpoint_query.expand(bs, -1, -1), fused)
+            else:
                 joined = self.join(
                     self.checkpoint_query.expand(bs, -1, -1), fused)
-        else:
-            joined = self.join(
-                self.checkpoint_query.expand(bs, -1, -1), fused)
 
-        gru_feat = joined[:, :self.config.predict_checkpoint_len]   # [B, 10, 256]
-        ts_feat  = joined[:, self.config.predict_checkpoint_len]    # [B, 256]
+            gru_feat = joined[:, :self.config.predict_checkpoint_len]   # [B, 10, 256]
+            ts_feat  = joined[:, self.config.predict_checkpoint_len]    # [B, 256]
 
-        # ── decoders ────────────────────────────────────────────────────────
-        if _t:
-            with _t.measure('student/decoder/gru_checkpoint'):
-                pred_checkpoint = self.checkpoint_decoder(gru_feat, target_point)
-            with _t.measure('student/decoder/target_speed_network'):
+            # ── decoders ────────────────────────────────────────────────────────
+            if _t:
+                with _t.measure('student/decoder/gru_checkpoint'):
+                    pred_checkpoint = self.checkpoint_decoder(gru_feat, target_point)
+                with _t.measure('student/decoder/target_speed_network'):
+                    pred_target_speed = self.target_speed_network(ts_feat)
+            else:
+                pred_checkpoint   = self.checkpoint_decoder(gru_feat, target_point)
                 pred_target_speed = self.target_speed_network(ts_feat)
-        else:
-            pred_checkpoint   = self.checkpoint_decoder(gru_feat, target_point)
-            pred_target_speed = self.target_speed_network(ts_feat)
 
         # ── bounding box head (training only, not in student outputs) ─────────
         pred_bounding_box = None

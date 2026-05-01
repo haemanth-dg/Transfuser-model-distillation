@@ -107,7 +107,16 @@ def _save_epoch_state(
         json.dump(meta, f, indent=2)
 
 
+def _load_finetuning_state(loadfile, device):
+    """Load only model weights for fine-tuning (continue_epoch=0 mode)."""
+    if not os.path.isfile(loadfile):
+        raise FileNotFoundError(loadfile)
+    student_state_dict = torch.load(loadfile, map_location=device)
+    return student_state_dict
+
+
 def _load_resume_state(loadfile, device):
+    """Load full checkpoint state for resume training (continue_epoch>0 mode)."""
     if not os.path.isfile(loadfile):
         raise FileNotFoundError(loadfile)
 
@@ -120,6 +129,7 @@ def _load_resume_state(loadfile, device):
         'scaler_state_dict': None,
         'epoch': None,
         'best_val_total': None,
+        'hyperparameters': {},
     }
 
     if os.path.isfile(paths['scaler']):
@@ -134,6 +144,11 @@ def _load_resume_state(loadfile, device):
             meta = json.load(f)
         checkpoint['epoch'] = meta.get('epoch', None)
         checkpoint['best_val_total'] = meta.get('best_val_total', None)
+        checkpoint['hyperparameters'] = meta.get('hyperparameters', {})
+    else:
+        raise FileNotFoundError(
+            f'Resume mode requires meta_data.json at {paths["meta_json"]}'
+        )
 
     return checkpoint
 
@@ -168,6 +183,26 @@ class _TeacherHooks:
             h.remove()
 
 
+def _get_bbox_keys_from_state_dict(state_dict):
+    """Extract all head.* keys from state_dict."""
+    head_keys = set()
+    for key in state_dict.keys():
+        if key.startswith('head.'):
+            head_keys.add(key)
+        elif key.startswith('module.head.'):
+            head_keys.add(key)
+    return head_keys
+
+
+def _check_bbox_key_presence(state_dict):
+    """
+    Check bbox key presence in state_dict.
+    Returns: 'present' or 'absent'.
+    """
+    head_keys = _get_bbox_keys_from_state_dict(state_dict)
+    return 'present' if head_keys else 'absent'
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Loss
 # ──────────────────────────────────────────────────────────────────────────────
@@ -179,6 +214,7 @@ def compute_kd_loss(
     teacher_hooks: _TeacherHooks,
     batch,
     device,
+    bbox_only: bool = False,
     w_ck:   float = 1.0,
     w_ts:   float = 1.0,
     w_feat: float = 0.5,
@@ -192,17 +228,20 @@ def compute_kd_loss(
     student_out : 11-tuple from StudentNet.forward()
     teacher_out : 10-tuple from LidarCenterNet.forward()
     """
-    pred_target_speed = student_out[1]   # [B, 8]
-    pred_checkpoint   = student_out[2]   # [B, 10, 2]
+    pred_target_speed = student_out[1]   # [B, 8] or None in bbox-only
+    pred_checkpoint   = student_out[2]   # [B, 10, 2] or None in bbox-only
     pred_bounding_box = student_out[6]   # tuple of bbox head outputs
     kd                = student_out[10]  # dict with 'bev', 'fused'
 
-    gt_checkpoints  = batch['checkpoints'].to(device)    # [B, 10, 2]
-    gt_speed_cls    = batch['target_speed'].to(device)   # [B] long
-
-    # ── task losses ─────────────────────────────────────────────────────────
-    L_ck = F.smooth_l1_loss(pred_checkpoint, gt_checkpoints)
-    L_ts = F.cross_entropy(pred_target_speed, gt_speed_cls)
+    # ── task losses (planning) ─────────────────────────────────────────────
+    if bbox_only:
+        L_ck = torch.zeros((), device=device)
+        L_ts = torch.zeros((), device=device)
+    else:
+        gt_checkpoints  = batch['checkpoints'].to(device)    # [B, 10, 2]
+        gt_speed_cls    = batch['target_speed'].to(device)   # [B] long
+        L_ck = F.smooth_l1_loss(pred_checkpoint, gt_checkpoints)
+        L_ts = F.cross_entropy(pred_target_speed, gt_speed_cls)
 
     # ── feature KD losses ────────────────────────────────────────────────────
     # teacher features captured by hooks during teacher.forward()
@@ -213,12 +252,15 @@ def compute_kd_loss(
     L_fused_kd = F.mse_loss(kd['fused'], teacher_fused)
 
     # ── output KD: soft speed targets ────────────────────────────────────────
-    teacher_speed = teacher_out[1].detach()   # [B, 8]
-    L_speed_kd = F.kl_div(
-        F.log_softmax(pred_target_speed / T, dim=-1),
-        F.softmax(teacher_speed / T, dim=-1),
-        reduction='batchmean',
-    ) * (T ** 2)
+    if bbox_only:
+        L_speed_kd = torch.zeros((), device=device)
+    else:
+        teacher_speed = teacher_out[1].detach()   # [B, 8]
+        L_speed_kd = F.kl_div(
+            F.log_softmax(pred_target_speed / T, dim=-1),
+            F.softmax(teacher_speed / T, dim=-1),
+            reduction='batchmean',
+        ) * (T ** 2)
 
     # ── supervised bbox loss ────────────────────────────────────────────────
     bbox_losses = {}
@@ -266,6 +308,15 @@ def compute_kd_loss(
     return total, components
 
 
+def _make_dummy_planning_inputs(config: GlobalConfig, batch_size: int, device: torch.device):
+    tp_size = 4 if getattr(config, 'two_tp_input', False) else 2
+    target_point = torch.zeros((batch_size, tp_size), device=device)
+    target_point_next = torch.zeros((batch_size, tp_size), device=device)
+    ego_vel = torch.zeros((batch_size, 1), device=device)
+    command = torch.zeros((batch_size, 6), device=device)
+    return target_point, target_point_next, ego_vel, command
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Train / val loops
 # ──────────────────────────────────────────────────────────────────────────────
@@ -278,6 +329,7 @@ def train_one_epoch(
     device:   torch.device,
     hooks:    _TeacherHooks,
     loss_weights: dict,
+    bbox_only: bool = False,
     scaler:   torch.cuda.amp.GradScaler = None,
     log_every: int = 50,
 ):
@@ -290,39 +342,51 @@ def train_one_epoch(
     for step, batch in tqdm(enumerate(loader), total=len(loader)):
         rgb         = batch['rgb'].to(device)
         lidar_bev   = batch['lidar_bev'].to(device)
-        target_point= batch['target_point'].to(device)
-        ego_vel     = batch['ego_vel'].to(device)
-        command     = batch['command'].to(device)
 
-        # print(f"rgb shape: {rgb[0].shape}, lidar_bev shape: {lidar_bev[0].shape}")
-        # pil_rgb = Image.fromarray((rgb[0].cpu().permute(1, 2, 0).numpy()).astype('uint8'))
-        # pil_rgb.save('debug_rgb.png')
-        # pil_lidar_bev = Image.fromarray((lidar_bev[0].cpu().numpy()[0] * 255).astype('uint8'))
-        # pil_lidar_bev.save('debug_lidar_bev.png')
-        # print('Saved debug_rgb.png and debug_lidar_bev.png for inspection.')
+        if bbox_only:
+            target_point, target_point_next, ego_vel, command = _make_dummy_planning_inputs(
+                student.config, rgb.shape[0], device)
+        else:
+            target_point= batch['target_point'].to(device)
+            target_point_next = None
+            ego_vel     = batch['ego_vel'].to(device)
+            command     = batch['command'].to(device)
+
+        print(f"rgb shape: {rgb[0].shape}, lidar_bev shape: {lidar_bev[0].shape}")
+        pil_rgb = Image.fromarray((rgb[0].cpu().permute(1, 2, 0).numpy()).astype('uint8'))
+        pil_rgb.save('debug_rgb.png')
+        pil_lidar_bev = Image.fromarray((lidar_bev[0].cpu().numpy()[0] * 255).astype('uint8'))
+        pil_lidar_bev.save('debug_lidar_bev.png')
+        print('Saved debug_rgb.png and debug_lidar_bev.png for inspection.')
 
         # ── teacher forward (no grad, eval BN) ───────────────────────────────
         with torch.no_grad():
-            teacher_out = teacher(rgb, lidar_bev, target_point, ego_vel, command)
+            teacher_out = teacher(
+                rgb, lidar_bev, target_point, ego_vel, command,
+                target_point_next=target_point_next)
 
         # ── student forward ───────────────────────────────────────────────────
         optimizer.zero_grad()
         if scaler is not None:
             with torch.autocast(device_type='cuda'):
-                student_out = student(rgb, lidar_bev, target_point, ego_vel, command)
+                student_out = student(
+                    rgb, lidar_bev, target_point, ego_vel, command,
+                    target_point_next=target_point_next, bbox_only=bbox_only)
                 loss, comps = compute_kd_loss(
                     student, student_out, teacher_out, hooks, batch, device,
-                    **loss_weights)
+                    bbox_only=bbox_only, **loss_weights)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
             scaler.step(optimizer) 
             scaler.update()
         else:
-            student_out = student(rgb, lidar_bev, target_point, ego_vel, command)
+            student_out = student(
+                rgb, lidar_bev, target_point, ego_vel, command,
+                target_point_next=target_point_next, bbox_only=bbox_only)
             loss, comps = compute_kd_loss(
                 student, student_out, teacher_out, hooks, batch, device,
-                **loss_weights)
+                bbox_only=bbox_only, **loss_weights)
             loss.backward()
             nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
             optimizer.step()
@@ -347,6 +411,7 @@ def validate(
     device:   torch.device,
     hooks:    _TeacherHooks,
     loss_weights: dict,
+    bbox_only: bool = False,
 ):
     student.eval()
     teacher.eval()
@@ -357,20 +422,31 @@ def validate(
     for batch in tqdm(loader):
         rgb         = batch['rgb'].to(device)
         lidar_bev   = batch['lidar_bev'].to(device)
-        target_point= batch['target_point'].to(device)
-        ego_vel     = batch['ego_vel'].to(device)
-        command     = batch['command'].to(device)
 
-        teacher_out = teacher(rgb, lidar_bev, target_point, ego_vel, command)
+        if bbox_only:
+            target_point, target_point_next, ego_vel, command = _make_dummy_planning_inputs(
+                student.config, rgb.shape[0], device)
+        else:
+            target_point= batch['target_point'].to(device)
+            target_point_next = None
+            ego_vel     = batch['ego_vel'].to(device)
+            command     = batch['command'].to(device)
+
+        teacher_out = teacher(
+            rgb, lidar_bev, target_point, ego_vel, command,
+            target_point_next=target_point_next)
 
         # student in eval: kd dict is empty — run hooks-only path for val loss
         # temporarily switch to train so kd projectors fire
         student.train()
-        student_out = student(rgb, lidar_bev, target_point, ego_vel, command)
+        student_out = student(
+            rgb, lidar_bev, target_point, ego_vel, command,
+            target_point_next=target_point_next, bbox_only=bbox_only)
         student.eval()
 
         _, comps = compute_kd_loss(
-            student, student_out, teacher_out, hooks, batch, device, **loss_weights)
+            student, student_out, teacher_out, hooks, batch, device,
+            bbox_only=bbox_only, **loss_weights)
 
         for k, v in comps.items():
             running[k] = running.get(k, 0.0) + v
@@ -397,6 +473,7 @@ def train(
     log_every:    int = 50,
     loss_weights: dict = None,
     detect_boxes: bool = True,
+    bbox_only_train: bool = False,
     loadfile:     str = None,
     continue_epoch: int = 0,
     hyperparameters: dict = None,
@@ -429,6 +506,10 @@ def train(
     config.initialize(setting='eval', **cfg_dict)
     config.compile = False
     config.detect_boxes = bool(detect_boxes)
+    config.bbox_only_train = bool(bbox_only_train)
+
+    if config.bbox_only_train and not config.detect_boxes:
+        raise ValueError('bbox_only_train requires detect_boxes=True.')
 
     # ── teacher (frozen) ──────────────────────────────────────────────────────
     teacher = LidarCenterNet(config)
@@ -451,7 +532,7 @@ def train(
         student.head.load_state_dict(teacher.head.state_dict(), strict=True)
         print('Initialized student bbox head from teacher checkpoint weights.')
 
-    start_epoch = 1
+    start_epoch = 0
     best_val_total = float('inf')
 
     optimizer = torch.optim.AdamW(
@@ -465,72 +546,110 @@ def train(
     writer = SummaryWriter(log_dir=tb_dir)
     print(f'TensorBoard logs: {tb_dir}')
 
-    def _assert_resume_has_compatible_bbox_head(state_dict):
-        if not config.detect_boxes:
-            return
-        if not hasattr(student, 'head'):
-            raise RuntimeError('detect_boxes=True but student model has no bbox head.')
+    # ── MODE DISPATCH: Fine-tune (continue_epoch=0) vs Resume (continue_epoch>0) ──
+    mode = 'finetune' if int(continue_epoch) == 0 else 'resume'
+    print(f'Checkpoint mode: {mode}')
 
-        expected = student.head.state_dict()
-        possible_prefixes = ('head.', 'module.head.')
-        missing = []
-        mismatched = []
-
-        for key, value in expected.items():
-            loaded_value = None
-            for prefix in possible_prefixes:
-                full_key = f'{prefix}{key}'
-                if full_key in state_dict:
-                    loaded_value = state_dict[full_key]
-                    break
-            if loaded_value is None:
-                missing.append(key)
-                continue
-            if tuple(loaded_value.shape) != tuple(value.shape):
-                mismatched.append((key, tuple(value.shape), tuple(loaded_value.shape)))
-
-        if missing or mismatched:
-            details = []
-            if missing:
-                details.append(f'missing keys: {missing[:5]}')
-            if mismatched:
-                preview = [f'{k} expected {es} got {gs}' for k, es, gs in mismatched[:3]]
-                details.append('shape mismatches: ' + '; '.join(preview))
-            raise RuntimeError(
-                'Resume checkpoint is incompatible with bbox-head training. '
-                + ' | '.join(details)
+    if mode == 'finetune':
+        # ── FINE-TUNE MODE (continue_epoch=0) ──
+        if loadfile is not None:
+            if not os.path.isfile(loadfile):
+                raise FileNotFoundError(loadfile)
+            print(f'[FINETUNE] Loading model weights from: {loadfile}')
+            
+            # Load model weights only (no optimizer/scheduler/scaler/meta)
+            student_state_dict = _load_finetuning_state(loadfile, device)
+            
+            # Handle bbox head initialization for fine-tune mode
+            if config.detect_boxes:
+                bbox_keys = _get_bbox_keys_from_state_dict(student_state_dict)
+                if not bbox_keys:
+                    # No bbox keys in loaded file: initialize from teacher
+                    if not hasattr(teacher, 'head') or not hasattr(student, 'head'):
+                        raise RuntimeError(
+                            'detect_boxes=True but teacher/student bbox head unavailable. '
+                            'Cannot fallback to teacher weights for missing bbox keys.'
+                        )
+                    print('[FINETUNE] Loaded checkpoint has no bbox head keys. '
+                          'Initializing bbox head from teacher.')
+                    # First init bbox from teacher
+                    student.head.load_state_dict(teacher.head.state_dict(), strict=True)
+                    # Then load checkpoint non-strictly to preserve bbox init but load other weights
+                    student.load_state_dict(student_state_dict, strict=False)
+                else:
+                    # Bbox keys present: load strictly
+                    student.load_state_dict(student_state_dict, strict=True)
+            else:
+                # No bbox detection: load strictly
+                student.load_state_dict(student_state_dict, strict=True)
+            
+            print('[FINETUNE] Model loaded. Starting from epoch 0 (fine-tuning).')
+        else:
+            # No loadfile: random init + teacher bbox init (if enabled)
+            if config.detect_boxes:
+                if not hasattr(teacher, 'head') or not hasattr(student, 'head'):
+                    raise RuntimeError('detect_boxes=True but teacher/student bbox head is unavailable.')
+                student.head.load_state_dict(teacher.head.state_dict(), strict=True)
+                print('Initialized student bbox head from teacher checkpoint weights.')
+        
+        # Fine-tune always resets to epoch 0 and fresh training state
+        start_epoch = 0
+        best_val_total = float('inf')
+        
+    else:
+        # ── RESUME MODE (continue_epoch > 0) ──
+        if loadfile is None:
+            raise ValueError(
+                'Resume mode (continue_epoch > 0) requires --loadfile argument. '
+                'Checkpoint file must be provided.'
             )
-
-    if loadfile is not None:
         if not os.path.isfile(loadfile):
             raise FileNotFoundError(loadfile)
-        print(f'Loading student resume file: {loadfile}')
+        
+        print(f'[RESUME] Loading full checkpoint from: {loadfile}')
+        
+        # Load full state
         checkpoint = _load_resume_state(loadfile, device)
-        inferred_epoch = _infer_epoch_from_path(loadfile)
-
-        def _resolve_resume_epoch(checkpoint_epoch):
-            candidates = []
-            if checkpoint_epoch is not None:
-                candidates.append(int(checkpoint_epoch))
-            if inferred_epoch is not None:
-                candidates.append(int(inferred_epoch))
-            if continue_epoch is not None and int(continue_epoch) > 0:
-                candidates.append(int(continue_epoch))
-            return max(candidates) if candidates else 0
-
-        _assert_resume_has_compatible_bbox_head(checkpoint['student_state_dict'])
+        
+        # Validate detect_boxes compatibility from metadata
+        saved_detect_boxes = checkpoint['hyperparameters'].get('detect_boxes', None)
+        if saved_detect_boxes is None:
+            raise ValueError(
+                f'Resume mode requires hyperparameters.detect_boxes in checkpoint metadata. '
+                f'File: {os.path.join(os.path.dirname(loadfile), "meta_data.json")}'
+            )
+        if bool(saved_detect_boxes) != bool(detect_boxes):
+            raise ValueError(
+                f'Resume mode: detect_boxes mismatch. '
+                f'Checkpoint has detect_boxes={saved_detect_boxes}, '
+                f'but runtime argument is detect_boxes={detect_boxes}. '
+                f'These must match for resume to proceed.'
+            )
+        
+        # Load student model
         student.load_state_dict(checkpoint['student_state_dict'], strict=True)
+        
+        # Load optimizer, scheduler, scaler
         if checkpoint.get('optimizer_state_dict') is not None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if checkpoint.get('scheduler_state_dict') is not None:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         if scaler is not None and checkpoint.get('scaler_state_dict') is not None:
             scaler.load_state_dict(checkpoint['scaler_state_dict'])
-        best_val_total = float(checkpoint.get('best_val_total', best_val_total))
-        resumed_epoch = _resolve_resume_epoch(checkpoint.get('epoch', None))
-        start_epoch = resumed_epoch + 1
-        print(f'Resume epoch resolved from metadata/file/arg: {resumed_epoch}')
-        print(f'Resuming from epoch {start_epoch}')
+        
+        # Resolve resume epoch
+        saved_epoch = checkpoint.get('epoch', None)
+        inferred_epoch = _infer_epoch_from_path(loadfile)
+        resume_epoch = saved_epoch if saved_epoch is not None else inferred_epoch
+        if resume_epoch is None:
+            resume_epoch = 0
+        
+        start_epoch = int(resume_epoch) + 1
+        best_val_total = float(checkpoint.get('best_val_total', float('inf')))
+        
+        print(f'[RESUME] Epoch resolved from metadata: {saved_epoch}. '
+              f'Continuing from epoch {start_epoch}.')
+
 
     # ── loss weights ──────────────────────────────────────────────────────────
     _defaults = dict(w_ck=1.0, w_ts=1.0, w_feat=0.5, w_kd=0.5, T=4.0)
@@ -543,21 +662,25 @@ def train(
     hp.setdefault('save_every', int(save_every))
     hp.setdefault('log_every', int(log_every))
     hp.setdefault('detect_boxes', bool(detect_boxes))
+    hp.setdefault('bbox_only_train', bool(bbox_only_train))
     hp.setdefault('continue_epoch', int(continue_epoch))
     hp.setdefault('loss_weights', dict(lw))
 
     # ── training loop ─────────────────────────────────────────────────────────
+    # Epochs are now zero-based: range [0, epochs)
     try:
-        for epoch in range(start_epoch, epochs + 1):
-            print(f'\n[Epoch {epoch}/{epochs}]  lr={scheduler.get_last_lr()[0]:.2e}')
+        for epoch in range(start_epoch, epochs):
+            print(f'\n[Epoch {epoch}/{epochs-1}]  lr={scheduler.get_last_lr()[0]:.2e}')
 
             train_metrics = train_one_epoch(
                 teacher, student, train_loader, optimizer, device,
-                hooks, lw, scaler=scaler, log_every=log_every)
+                hooks, lw, bbox_only=bbox_only_train,
+                scaler=scaler, log_every=log_every)
             scheduler.step()
 
             val_metrics = validate(
-                teacher, student, val_loader, device, hooks, lw)
+                teacher, student, val_loader, device, hooks, lw,
+                bbox_only=bbox_only_train)
 
             # log
             print(f'  TRAIN  ' +

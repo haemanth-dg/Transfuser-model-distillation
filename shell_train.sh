@@ -13,17 +13,36 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)/this_studio"
 PYTHON_BIN="${PYTHON_BIN:-/home/haemanth/miniconda3/envs/tf++/bin/python}"
 CONFIG_PATH="$REPO_ROOT/models/pretrained_models/all_towns/config.json"
 TEACHER_CKPT="$REPO_ROOT/models/pretrained_models/all_towns/model_final_merged.pth"
-DATA_ROOT="/teamspace/studios/this_studio/train_dataset_mini"
+DATA_ROOT="/teamspace/studios/this_studio/idd_processed"
 OUTPUT_DIR="$REPO_ROOT/output"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-student_kd_experiment}"
 RUN_OUTPUT_DIR="$OUTPUT_DIR/$EXPERIMENT_NAME"
-LOADFILE="${LOADFILE:-}"
+
+# ── CHECKPOINT & MODE SELECTION ──
+# Set LOADFILE and CONTINUE_EPOCH to control training mode:
+#   1. FINE-TUNE MODE (continue_epoch=0):
+#      - LOADFILE=path/to/model.pth, CONTINUE_EPOCH=0
+#      - Loads only model weights from LOADFILE, resets optimizer/scheduler/scaler
+#      - Starts from epoch 0
+#      - LOADFILE can be omitted for fresh training from random init
+#   2. RESUME MODE (continue_epoch>0):
+#      - LOADFILE=path/to/model_000x.pth, CONTINUE_EPOCH=1 (or any >0)
+#      - Loads full checkpoint state (model + optimizer + scheduler + scaler + metadata)
+#      - Validates detect_boxes matches saved metadata
+#      - Continues from saved epoch
+#      - LOADFILE is REQUIRED in this mode
+LOADFILE="${LOADFILE:-/teamspace/studios/this_studio/student_model/student_best.pth}"
 CONTINUE_EPOCH="${CONTINUE_EPOCH:-0}"
+
+# ── BBOX-ONLY TRAINING ──
+# Set BBOX_ONLY_TRAIN=1 to train only the backbone + bbox head.
+# In this mode, planning head is skipped, and only bbox labels are required.
+BBOX_ONLY_TRAIN="${BBOX_ONLY_TRAIN:-1}"
 
 # Training hyperparameters
 EPOCHS=2
 BATCH_SIZE=8
-LR=1e-3
+LR=1e-9
 WEIGHT_DECAY=1e-4
 NUM_WORKERS=2
 SAVE_EVERY=5
@@ -49,6 +68,7 @@ echo "Experiment: $EXPERIMENT_NAME"
 echo "Run Output Dir: $RUN_OUTPUT_DIR"
 echo "Loadfile: ${LOADFILE:-<none>}"
 echo "Continue Epoch: $CONTINUE_EPOCH"
+echo "BBox-only Train: $BBOX_ONLY_TRAIN"
 echo "Epochs: $EPOCHS"
 echo "Batch Size: $BATCH_SIZE"
 echo "Learning Rate: $LR"
@@ -106,6 +126,10 @@ TRAIN_ARGS=(
 if [ -n "$LOADFILE" ]; then
     TRAIN_ARGS+=(--loadfile "$LOADFILE")
     TRAIN_ARGS+=(--continue_epoch "$CONTINUE_EPOCH")
+fi
+
+if [ "$BBOX_ONLY_TRAIN" = "1" ]; then
+    TRAIN_ARGS+=(--bbox_only_train)
 fi
 
 python -m model_nocarla.train \

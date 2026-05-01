@@ -42,6 +42,7 @@ class Custom_Data(Dataset):  # pylint: disable=locally-disabled, invalid-name
         self.validation = validation
         self.data_cache = shared_dict
         self.samples = []
+        self.bbox_only_train = bool(getattr(config, "bbox_only_train", False))
         self.image_augmenter_func = image_augmenter(getattr(config, "color_aug_prob", 0.0), cutout=getattr(config, "use_cutout", False))
         self.lidar_augmenter_func = lidar_augmenter(getattr(config, "lidar_aug_prob", 0.0), cutout=getattr(config, "use_cutout", False))
 
@@ -59,7 +60,9 @@ class Custom_Data(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 lidar_dir = os.path.join(dirpath, "lidar")
                 boxes_dir = os.path.join(dirpath, "boxes")
 
-                if not (os.path.isdir(measurement_dir) and os.path.isdir(rgb_dir) and os.path.isdir(lidar_dir)):
+                if not (os.path.isdir(rgb_dir) and os.path.isdir(lidar_dir)):
+                    continue
+                if not self.bbox_only_train and not os.path.isdir(measurement_dir):
                     continue
                 if not os.path.isdir(boxes_dir):
                     raise FileNotFoundError(f"Missing boxes folder for route: {boxes_dir}")
@@ -71,28 +74,48 @@ class Custom_Data(Dataset):  # pylint: disable=locally-disabled, invalid-name
                 if not self.validation and is_validation_route:
                     continue
 
-                for file_name in sorted(os.listdir(measurement_dir)):
-                    if not file_name.endswith(".json.gz"):
-                        continue
-                    frame_id = file_name[:-8]
-                    if int(frame_id) % int(getattr(self.config, "train_sampling_rate", 1)) != 0:
-                        continue
-                    measurement_path = os.path.join(measurement_dir, file_name)
-                    rgb_path = os.path.join(rgb_dir, f"{frame_id}.jpg")
-                    lidar_path = os.path.join(lidar_dir, f"{frame_id}.npy")
-                    lidar_laz_path = os.path.join(lidar_dir, f"{frame_id}.laz")
-                    boxes_path = os.path.join(boxes_dir, f"{frame_id}.json.gz")
-                    if not (
-                        os.path.isfile(measurement_path)
-                        and os.path.isfile(rgb_path)
-                        and (os.path.isfile(lidar_path) or os.path.isfile(lidar_laz_path))
-                        and os.path.isfile(boxes_path)
-                    ):
-                        continue
-                    self.samples.append((dirpath, frame_id))
+                if self.bbox_only_train:
+                    for file_name in sorted(os.listdir(boxes_dir)):
+                        if not file_name.endswith(".json.gz"):
+                            continue
+                        frame_id = file_name[:-8]
+                        if int(frame_id) % int(getattr(self.config, "train_sampling_rate", 1)) != 0:
+                            continue
+                        rgb_path = os.path.join(rgb_dir, f"{frame_id}.jpg")
+                        lidar_path = os.path.join(lidar_dir, f"{frame_id}.npy")
+                        lidar_laz_path = os.path.join(lidar_dir, f"{frame_id}.laz")
+                        boxes_path = os.path.join(boxes_dir, f"{frame_id}.json.gz")
+                        if not (
+                            os.path.isfile(rgb_path)
+                            and (os.path.isfile(lidar_path) or os.path.isfile(lidar_laz_path))
+                            and os.path.isfile(boxes_path)
+                        ):
+                            continue
+                        self.samples.append((dirpath, frame_id))
+                else:
+                    for file_name in sorted(os.listdir(measurement_dir)):
+                        if not file_name.endswith(".json.gz"):
+                            continue
+                        frame_id = file_name[:-8]
+                        if int(frame_id) % int(getattr(self.config, "train_sampling_rate", 1)) != 0:
+                            continue
+                        measurement_path = os.path.join(measurement_dir, file_name)
+                        rgb_path = os.path.join(rgb_dir, f"{frame_id}.jpg")
+                        lidar_path = os.path.join(lidar_dir, f"{frame_id}.npy")
+                        lidar_laz_path = os.path.join(lidar_dir, f"{frame_id}.laz")
+                        boxes_path = os.path.join(boxes_dir, f"{frame_id}.json.gz")
+                        if not (
+                            os.path.isfile(measurement_path)
+                            and os.path.isfile(rgb_path)
+                            and (os.path.isfile(lidar_path) or os.path.isfile(lidar_laz_path))
+                            and os.path.isfile(boxes_path)
+                        ):
+                            continue
+                        self.samples.append((dirpath, frame_id))
 
         if rank == 0:
-            print(f"Loaded {len(self.samples)} KD samples from {len(root)} root folder(s)")
+            mode = "bbox-only" if self.bbox_only_train else "full"
+            print(f"Loaded {len(self.samples)} KD samples from {len(root)} root folder(s) ({mode} mode)")
 
     def __len__(self):
         return len(self.samples)
@@ -101,7 +124,18 @@ class Custom_Data(Dataset):  # pylint: disable=locally-disabled, invalid-name
         cv2.setNumThreads(0)
         route_dir, frame_id = self.samples[index]
 
-        measurement = self._read_measurement(os.path.join(route_dir, "measurements", f"{frame_id}.json.gz"))
+        if self.bbox_only_train:
+            measurement = {
+                "route": [],
+                "target_point": [0.0, 0.0],
+                "command": 0,
+                "target_speed": 0.0,
+                "angle": 0.0,
+                "augmentation_rotation": 0.0,
+                "augmentation_translation": 0.0,
+            }
+        else:
+            measurement = self._read_measurement(os.path.join(route_dir, "measurements", f"{frame_id}.json.gz"))
         boxes = self._read_boxes(os.path.join(route_dir, "boxes", f"{frame_id}.json.gz"))
         rgb = self._load_rgb(os.path.join(route_dir, "rgb", f"{frame_id}.jpg"))
         rgb_augmented_path = os.path.join(route_dir, "rgb_augmented", f"{frame_id}.jpg")
@@ -148,24 +182,31 @@ class Custom_Data(Dataset):  # pylint: disable=locally-disabled, invalid-name
             lidar_bev = self.lidar_augmenter_func(image=np.transpose(lidar_bev, (1, 2, 0)))
             lidar_bev = np.transpose(lidar_bev, (2, 0, 1))
 
-        route = np.asarray(measurement.get("route", []), dtype=np.float32)
-        route = self._normalize_route(route)
-        route = self.augment_route(route, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
-        if getattr(self.config, "smooth_route", True):
-            route = self.smooth_path(route)
+        if self.bbox_only_train:
+            num_points = int(getattr(self.config, "num_route_points", 10))
+            route = np.zeros((num_points, 2), dtype=np.float32)
+            target_point = np.zeros((2,), dtype=np.float32)
+            command = t_u.command_to_one_hot(0).astype(np.float32)
+            target_speed = np.int64(0)
+        else:
+            route = np.asarray(measurement.get("route", []), dtype=np.float32)
+            route = self._normalize_route(route)
+            route = self.augment_route(route, y_augmentation=aug_translation, yaw_augmentation=aug_rotation)
+            if getattr(self.config, "smooth_route", True):
+                route = self.smooth_path(route)
 
-        target_point = np.asarray(measurement.get("target_point", [0.0, 0.0]), dtype=np.float32)
-        target_point = self.augment_target_point(
-            target_point,
-            y_augmentation=aug_translation,
-            yaw_augmentation=aug_rotation,
-        )
-        command = t_u.command_to_one_hot(int(measurement.get("command", 0))).astype(np.float32)
-        target_speed = np.int64(self.get_indices_speed_angle(
-            target_speed=float(measurement.get("target_speed", 0.0)),
-            brake=False,
-            angle=float(measurement.get("angle", 0.0)),
-        )[0])
+            target_point = np.asarray(measurement.get("target_point", [0.0, 0.0]), dtype=np.float32)
+            target_point = self.augment_target_point(
+                target_point,
+                y_augmentation=aug_translation,
+                yaw_augmentation=aug_rotation,
+            )
+            command = t_u.command_to_one_hot(int(measurement.get("command", 0))).astype(np.float32)
+            target_speed = np.int64(self.get_indices_speed_angle(
+                target_speed=float(measurement.get("target_speed", 0.0)),
+                brake=False,
+                angle=float(measurement.get("angle", 0.0)),
+            )[0])
 
         bboxes, _ = self.parse_bounding_boxes(
             boxes,
